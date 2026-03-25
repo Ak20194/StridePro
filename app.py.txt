@@ -1,0 +1,160 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as iogo
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_curve, auc, mean_squared_error
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from mlxtend.frequent_patterns import apriori, association_rules
+
+# --- CONFIGURATION ---
+st.set_page_config(page_title="RunFit AI - Data Driven Strategy", layout="wide")
+
+# --- 1. SYNTHETIC DATA GENERATION ENGINE ---
+@st.cache_data
+def generate_data(n=1000):
+    np.random.seed(42)
+    
+    # Base Features
+    ages = np.random.randint(18, 65, n)
+    gender = np.random.choice(['Male', 'Female', 'Non-binary'], n)
+    emirate = np.random.choice(['Dubai', 'Abu Dhabi', 'Sharjah', 'Other'], n, p=[0.5, 0.3, 0.1, 0.1])
+    
+    # Logic-Driven Budget (Regression Target)
+    # Budget influenced by Age and Emirate (Dubai/AD spend more)
+    base_budget = 300
+    budget = base_budget + (ages * 5) + np.random.normal(0, 50, n)
+    budget = np.where((emirate == 'Dubai') | (emirate == 'Abu Dhabi'), budget + 200, budget)
+    
+    # Mileage & Tech Interest
+    mileage = np.random.randint(5, 80, n)
+    tech_interest = np.random.choice([0, 1], n, p=[0.4, 0.6])
+    
+    # Categorical Choices for Association Rules
+    colors = np.random.choice(['Neon', 'Classic Black', 'Earth Tones'], n)
+    soles = np.random.choice(['Carbon-Plated', 'Max Cushion', 'Flexible'], n)
+    
+    # TARGET: Classification (Interest in App)
+    # Probabilistic logic: If high mileage + tech interest + high budget = Likely 'Yes'
+    prob = (mileage/80 * 0.4) + (tech_interest * 0.3) + (budget/1500 * 0.3)
+    target = [1 if p > 0.5 else 0 for p in prob]
+    
+    # Adding Noise & Outliers
+    budget[0:10] = 2500 # The "Wealthy Outliers"
+    budget[10:20] = 50   # The "Bargain Hunters"
+    
+    df = pd.DataFrame({
+        'Age': ages,
+        'Gender': gender,
+        'Emirate': emirate,
+        'Weekly_Mileage': mileage,
+        'Budget_AED': budget.astype(int),
+        'Tech_Savvy': tech_interest,
+        'Color_Preference': colors,
+        'Sole_Type': soles,
+        'App_Interest': target
+    })
+    return df
+
+df = generate_data()
+
+# --- SIDEBAR NAVIGATION ---
+st.sidebar.title("RunFit AI Dashboard")
+app_mode = st.sidebar.selectbox("Choose Analysis Module", 
+    ["Data Overview", "Classification (Targeting)", "Clustering (Personas)", "Association (Bundles)", "Regression (Budget)"])
+
+# --- MODULE 1: DATA OVERVIEW ---
+if app_mode == "Data Overview":
+    st.header("👟 RunFit Consumer Dataset")
+    st.write(df.head(10))
+    st.sidebar.write(f"Total Respondents: {len(df)}")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.plotly_chart(px.histogram(df, x="Budget_AED", title="Distribution of Spending Power (AED)"))
+    with col2:
+        st.plotly_chart(px.pie(df, names='Emirate', title="Market Share by Emirate"))
+
+# --- MODULE 2: CLASSIFICATION ---
+elif app_mode == "Classification (Targeting)":
+    st.header("🎯 Classification: Predicting App Interest")
+    
+    # Prep Data
+    X = df[['Age', 'Weekly_Mileage', 'Budget_AED', 'Tech_Savvy']]
+    y = df['App_Interest']
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    model = RandomForestClassifier()
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+    y_prob = model.predict_proba(X_test)[:, 1]
+    
+    # Metrics
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Accuracy", f"{accuracy_score(y_test, y_pred):.2f}")
+    c2.metric("Precision", f"{precision_score(y_test, y_pred):.2f}")
+    c3.metric("Recall", f"{recall_score(y_test, y_pred):.2f}")
+    c4.metric("F1 Score", f"{f1_score(y_test, y_pred):.2f}")
+    
+    # ROC Curve
+    fpr, tpr, _ = roc_curve(y_test, y_prob)
+    fig_roc = px.area(x=fpr, y=tpr, title=f'ROC Curve (AUC={auc(fpr, tpr):.2f})',
+                     labels={'x':'False Positive Rate', 'y':'True Positive Rate'})
+    fig_roc.add_shape(type='line', line=dict(dash='dash'), x0=0, x1=1, y0=0, y1=1)
+    st.plotly_chart(fig_roc)
+    
+    # Feature Importance
+    feat_importances = pd.Series(model.feature_importances_, index=X.columns)
+    st.plotly_chart(px.bar(feat_importances, title="Key Drivers of App Interest"))
+
+# --- MODULE 3: CLUSTERING ---
+elif app_mode == "Clustering (Personas)":
+    st.header("👥 Customer Segmentation (K-Means)")
+    
+    features = df[['Weekly_Mileage', 'Budget_AED']]
+    scaler = StandardScaler()
+    scaled_features = scaler.fit_transform(features)
+    
+    kmeans = KMeans(n_clusters=3, random_state=42)
+    df['Cluster'] = kmeans.fit_predict(scaled_features)
+    
+    fig_cluster = px.scatter(df, x="Weekly_Mileage", y="Budget_AED", color="Cluster",
+                            title="Segments: Casual vs Elite vs Luxury", hover_data=['Emirate'])
+    st.plotly_chart(fig_cluster)
+    st.write("**Strategy:** Use Cluster 2 for premium carbon-shoe bundles; Cluster 0 for entry-level discounts.")
+
+# --- MODULE 4: ASSOCIATION RULE MINING ---
+elif app_mode == "Association (Bundles)":
+    st.header("🔗 Association Rules: Preference Mapping")
+    
+    # One-hot encoding for preferences
+    basket = pd.get_dummies(df[['Color_Preference', 'Sole_Type']])
+    frequent_itemsets = apriori(basket, min_support=0.05, use_colnames=True)
+    rules = association_rules(frequent_itemsets, metric="lift", min_threshold=1)
+    
+    st.write("Top Associations (Confidence & Lift)")
+    st.dataframe(rules[['antecedents', 'consequents', 'support', 'confidence', 'lift']].sort_values('lift', ascending=False))
+
+# --- MODULE 5: REGRESSION ---
+elif app_mode == "Regression (Budget)":
+    st.header("💰 Regression: Predicting Spending Power")
+    
+    X_reg = df[['Age', 'Weekly_Mileage', 'Tech_Savvy']]
+    y_reg = df['Budget_AED']
+    X_t, X_v, y_t, y_v = train_test_split(X_reg, y_reg, test_size=0.2)
+    
+    reg_model = RandomForestRegressor()
+    reg_model.fit(X_t, y_t)
+    preds = reg_model.predict(X_v)
+    
+    fig_reg = iogo.Figure()
+    fig_reg.add_trace(iogo.Scatter(x=y_v, y=preds, mode='markers', name='Actual vs Predicted'))
+    fig_reg.add_trace(iogo.Line(x=[min(y_v), max(y_v)], y=[min(y_v), max(y_v)], name='Perfect Prediction'))
+    fig_reg.update_layout(title="Budget Prediction Performance", xaxis_title="Actual Budget", yaxis_title="Predicted Budget")
+    st.plotly_chart(fig_reg)
+    st.write(f"Model Error (RMSE): {np.sqrt(mean_squared_error(y_v, preds)):.2f} AED")
